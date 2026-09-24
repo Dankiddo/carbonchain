@@ -32,11 +32,12 @@ pub mod types;
 use crate::approvals_bitmap::{clear_approvals, count_approvals, has_approved, mark_approved};
 use crate::errors::CarbonChainError;
 use crate::events::{
-    ContractInitialized, ContractPaused, ContractUnpaused, ContractUpgraded, CreditDisputed,
-    CreditExpired, CreditFlagged, CreditMinted, CreditSplit, CreditSubmitted, CreditTransferred,
-    CreditsMerged, DisputeResolved, FlagResolved, ProjectRegistered, RetirementContractUpdated,
-    SessionNew, StakeDeposited, StakeWithdrawn, UnbondingInitiated, VerifierRegistered,
-    VerifierRemoved, VerifierServicesConfigured, VerifierSlashed,
+    AdminTransferAccepted, AdminTransferCancelled, AdminTransferProposed, ContractInitialized,
+    ContractPaused, ContractUnpaused, ContractUpgraded, CreditDisputed, CreditExpired,
+    CreditFlagged, CreditMinted, CreditSplit, CreditSubmitted, CreditTransferred, CreditsMerged,
+    DisputeResolved, FlagResolved, ProjectRegistered, RetirementContractUpdated, SessionNew,
+    StakeDeposited, StakeWithdrawn, UnbondingInitiated, VerifierRegistered, VerifierRemoved,
+    VerifierServicesConfigured, VerifierSlashed,
 };
 use crate::migrations::{run_migrations, CURRENT_VERSION};
 use crate::storage::{
@@ -1306,6 +1307,7 @@ impl CreditRegistry {
         env.storage()
             .instance()
             .set(&crate::types::DataKey::PendingAdmin, &new_admin);
+        AdminTransferProposed { admin, new_admin }.publish(&env);
         Ok(())
     }
 
@@ -1325,10 +1327,43 @@ impl CreditRegistry {
             return Err(CarbonChainError::Unauthorized);
         }
         new_admin.require_auth();
+        let old_admin = get_admin(&env).ok_or(CarbonChainError::NotInitialized)?;
         set_admin(&env, &new_admin);
         env.storage()
             .instance()
             .remove(&crate::types::DataKey::PendingAdmin);
+        AdminTransferAccepted {
+            old_admin,
+            new_admin,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    /// Cancel a pending admin transfer initiated by [`propose_admin`].
+    /// Only the current admin may call this.
+    ///
+    /// # Errors
+    /// - [`CarbonChainError::NotInitialized`] — contract has not been initialised.
+    /// - [`CarbonChainError::Unauthorized`] — caller is not the current admin.
+    /// - [`CarbonChainError::NoPendingAdmin`] — no transfer has been proposed.
+    pub fn cancel_admin_transfer(env: Env, admin: Address) -> Result<(), CarbonChainError> {
+        let stored_admin = get_admin(&env).ok_or(CarbonChainError::NotInitialized)?;
+        admin.require_auth();
+        if admin != stored_admin {
+            return Err(CarbonChainError::Unauthorized);
+        }
+        if !env
+            .storage()
+            .instance()
+            .has(&crate::types::DataKey::PendingAdmin)
+        {
+            return Err(CarbonChainError::NoPendingAdmin);
+        }
+        env.storage()
+            .instance()
+            .remove(&crate::types::DataKey::PendingAdmin);
+        AdminTransferCancelled { admin }.publish(&env);
         Ok(())
     }
 

@@ -193,3 +193,26 @@ pub struct ContractUpgraded {
     pub new_wasm_hash: BytesN<32>,
     pub migrated_to_version: u32,
 }
+
+/// Emitted when a new admin is proposed.
+#[contractevent]
+#[derive(Clone)]
+pub struct AdminTransferProposed {
+    pub admin: Address,
+    pub new_admin: Address,
+}
+
+/// Emitted when the proposed admin accepts the role.
+#[contractevent]
+#[derive(Clone)]
+pub struct AdminTransferAccepted {
+    pub old_admin: Address,
+    pub new_admin: Address,
+}
+
+/// Emitted when a pending admin transfer is cancelled.
+#[contractevent]
+#[derive(Clone)]
+pub struct AdminTransferCancelled {
+    pub admin: Address,
+}
