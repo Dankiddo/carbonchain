@@ -122,16 +122,29 @@ export class RetirementService {
       );
     }
 
+    const tonnesToRetire = dto.tonnes ? dto.tonnes : credit.tonnes;
+    if (BigInt(tonnesToRetire) <= 0n || BigInt(tonnesToRetire) > BigInt(credit.tonnes)) {
+      throw new BadRequestException(
+        `Invalid retirement tonnes: ${tonnesToRetire}. Must be between 1 and ${credit.tonnes}`,
+      );
+    }
+
+    const isPartial = BigInt(tonnesToRetire) < BigInt(credit.tonnes);
+
     const result = await this.retire({
       buyerPublicKey,
       creditId,
-      tonnes: credit.tonnes,
+      tonnes: tonnesToRetire,
       reason: dto.reason,
       nonce: dto.nonce,
       vintageYear: credit.vintageYear,
     });
 
-    credit.status = CreditStatus.Retired;
+    if (isPartial) {
+      credit.tonnes = (BigInt(credit.tonnes) - BigInt(tonnesToRetire)).toString();
+    } else {
+      credit.status = CreditStatus.Retired;
+    }
     await this.creditRepo.save(credit);
 
     return result;

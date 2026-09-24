@@ -233,16 +233,28 @@ impl Retirement {
         preimage.append(&nonce.to_xdr(&env));
         let retirement_id: BytesN<32> = env.crypto().sha256(&preimage).into();
 
-        // Cross-contract: mark the credit as retired in the registry FIRST
+        // Cross-contract: if partial retirement, split credit first then mark retired child
+        let effective_credit_id: BytesN<32> = if tonnes < credit.tonnes {
+            let (child_to_retire, _child_remaining): (BytesN<32>, BytesN<32>) = env.invoke_contract(
+                &registry_id,
+                &Symbol::new(&env, "split_credit"),
+                (buyer.clone(), credit_id.clone(), tonnes, nonce).into_val(&env),
+            );
+            child_to_retire
+        } else {
+            credit_id.clone()
+        };
+
+        // Mark the credit as retired in the registry FIRST
         // This ensures atomicity - if this fails, the retirement record is never written
         let _: () = env.invoke_contract(
             &registry_id,
             &Symbol::new(&env, "mark_retired"),
-            (credit_id.clone(),).into_val(&env),
+            (effective_credit_id.clone(),).into_val(&env),
         );
 
         let record = RetirementRecord {
-            credit_id: credit_id.clone(),
+            credit_id: effective_credit_id,
             buyer: buyer.clone(),
             tonnes_retired: tonnes,
             reason,

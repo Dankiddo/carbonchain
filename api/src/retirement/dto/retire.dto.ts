@@ -5,6 +5,8 @@ import {
   IsInt,
   Min,
   Matches,
+  IsOptional,
+  IsNumberString,
 } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 
@@ -23,6 +25,15 @@ export class RetireDto {
   @IsInt()
   @Min(0)
   nonce: number = 0;
+
+  @ApiProperty({
+    example: '500000',
+    description: 'Number of tonnes to retire in scaled units (optional, defaults to entire credit)',
+    required: false,
+  })
+  @IsOptional()
+  @IsNumberString()
+  tonnes?: string;
 }
 
 /**
