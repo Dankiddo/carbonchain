@@ -899,8 +899,6 @@ impl Marketplace {
 
         // #692: reject any registry_id that does not match the one stored at init
         Self::validate_registry(&env, &registry_id)?;
-        // #691: reject any token_id that does not match the allowed payment token
-        Self::validate_token(&env, &token_id)?;
 
         // Load and validate the offer — all checks before any state mutation.
         let mut offer: Offer = env
@@ -930,8 +928,13 @@ impl Marketplace {
         }
 
         // Resolve which contract to call for balance/transfer.
+        // For Native offers, validate that token_id matches the allowed payment token.
+        // For Asset offers, the offer itself carries an explicit trusted SAC.
         let payment_contract: Address = match &offer.price_asset {
-            AssetType::Native => token_id.clone(),
+            AssetType::Native => {
+                Self::validate_token(&env, &token_id)?;
+                token_id.clone()
+            }
             AssetType::Asset(sac) => sac.clone(),
         };
 
