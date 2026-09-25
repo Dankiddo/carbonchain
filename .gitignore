@@ -141,3 +141,16 @@ pids/
 # Soroban CLI local deploy artifacts
 .stellar/
 contract-ids.*.json
+
+# NestJS / TypeScript compiled output
+api/dist/
+frontend/dist/
+
+# Jest worker cache
+.jest-worker-cache/
+
+# Angular cache
+.angular/cache/
+
+# Misc editor state
+.history/

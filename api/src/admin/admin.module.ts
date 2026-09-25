@@ -1,13 +1,20 @@
 import { Module } from '@nestjs/common';
+import { TypeOrmModule } from '@nestjs/typeorm';
 import { AdminController } from './admin.controller';
 import { AdminService } from './admin.service';
 import { AdminGuard } from './admin.guard';
+import { AdminAuditEntity } from './admin-audit.entity';
 import { CreditsModule } from '../credits/credits.module';
 import { VerifiersModule } from '../verifiers/verifiers.module';
 
 @Module({
-  imports: [CreditsModule, VerifiersModule],
+  imports: [
+    TypeOrmModule.forFeature([AdminAuditEntity]),
+    CreditsModule,
+    VerifiersModule,
+  ],
   controllers: [AdminController],
   providers: [AdminService, AdminGuard],
+  exports: [AdminService],
 })
 export class AdminModule {}
