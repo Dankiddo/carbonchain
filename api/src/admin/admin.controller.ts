@@ -10,6 +10,9 @@ import {
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { ApiTags, ApiOperation, ApiResponse, ApiQuery } from '@nestjs/swagger';
+import { Controller, Get, Post, Param, Body, UseGuards } from '@nestjs/common';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { AdminGuard } from './admin.guard';
 import { AdminService, AdminStats, AuditContext } from './admin.service';
 import type { VerifierCapabilities, AuditQueryOptions } from './admin.service';
@@ -48,7 +51,7 @@ function buildAuditCtx(
 }
 
 @ApiTags('admin')
-@UseGuards(AuthGuard('jwt'), AdminGuard)
+@UseGuards(JwtAuthGuard, AdminGuard)
 @Controller('admin')
 export class AdminController {
   constructor(private readonly adminService: AdminService) {}

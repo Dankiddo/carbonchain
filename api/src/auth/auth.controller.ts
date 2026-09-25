@@ -10,7 +10,6 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
-import { AuthGuard } from '@nestjs/passport';
 import { AuthService } from './auth.service';
 import { AuthTokenDto } from './dto/auth-token.dto';
 import {
@@ -112,7 +111,7 @@ export class AuthController {
   }
 
   @ApiOperation({ summary: 'Get authenticated account info' })
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(JwtAuthGuard)
   @Get('me')
   getMe(@Request() req: { user: { account: string } }): { account: string } {
     return { account: req.user.account };

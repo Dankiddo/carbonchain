@@ -2,6 +2,7 @@ import {
   Injectable,
   BadRequestException,
   UnauthorizedException,
+  ServiceUnavailableException,
   Logger,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
@@ -77,9 +78,10 @@ export class AuthService {
 
     const account = new Account(serverKeypair.publicKey(), '-1');
 
-    const nonce = Buffer.from(Keypair.random().rawPublicKey()).toString(
-      'base64',
-    );
+    // Generate a random 32-byte nonce; store as raw bytes in the manageData op
+    // so that op.value.toString('base64') round-trips cleanly.
+    const nonceBytes = Keypair.random().rawPublicKey();
+    const nonce = Buffer.from(nonceBytes).toString('base64');
 
     const tx = new TransactionBuilder(account, {
       fee: '100',
@@ -88,7 +90,7 @@ export class AuthService {
       .addOperation(
         Operation.manageData({
           name: `${this.serverHomeDomain} auth`,
-          value: nonce,
+          value: nonceBytes,
           source: clientAccount,
         }),
       )
@@ -191,6 +193,20 @@ export class AuthService {
     const nonceData = await this.cache.get<{ account: string }>(nonceKey);
 
     if (!nonceData) {
+    // Issue #254 — Verify nonce freshness and prevent replay attacks.
+    // The cached key is the base64-encoded nonce (see generateChallenge), so the
+    // Buffer value parsed back from the manageData op must be base64-encoded too.
+    const nonceValue = (manageDataOp as any).value as
+      | Buffer
+      | string
+      | undefined;
+    const nonce =
+      nonceValue instanceof Buffer
+        ? nonceValue.toString('base64')
+        : String(nonceValue);
+    const nonceKey = `sep10:nonce:${nonce}`;
+    const nonceExists = await this.cache.get<boolean>(nonceKey);
+    if (!nonceExists) {
       throw new UnauthorizedException(
         'Challenge nonce not found or already used',
       );
@@ -315,6 +331,17 @@ export class AuthService {
   private async revokeFamily(familyId: string): Promise<void> {
     await this.cache.del(`${REFRESH_FAMILY_PREFIX}${familyId}`);
     this.logger.log(`Revoked refresh token family ${familyId}`);
+    const blocklistKey = `${BLOCKLIST_PREFIX}${payload.jti}`;
+    const persisted = await this.cache.set(blocklistKey, true, remainingTtl);
+    if (!persisted) {
+      this.logger.error(
+        `JWT revocation NOT persisted (cache unavailable): jti=${payload.jti}`,
+      );
+      throw new ServiceUnavailableException(
+        'Unable to revoke token: revocation store unavailable. Token remains valid until it expires naturally.',
+      );
+    }
+    this.logger.log(`JWT revoked: jti=${payload.jti}, TTL=${remainingTtl}s`);
   }
 
   /**

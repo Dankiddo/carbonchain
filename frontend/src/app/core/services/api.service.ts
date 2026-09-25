@@ -141,6 +141,19 @@ export class ApiService {
     return this.http.get<string[]>(`${this.baseUrl}/credits/project/${projectId}`);
   }
 
+  /** GET /credits/owner/:owner — paginated list of credit IDs owned by `owner` */
+  listCreditsByOwner(
+    owner: string,
+    offset = 0,
+    limit = 50,
+  ): Observable<{ data: string[]; offset: number; limit: number }> {
+    const params = { offset: String(offset), limit: String(limit) };
+    return this.http.get<{ data: string[]; offset: number; limit: number }>(
+      `${this.baseUrl}/credits/owner/${owner}`,
+      { params },
+    );
+  }
+
   // ── Marketplace ───────────────────────────────────────────────────────────
 
   /** GET /marketplace/listings — all active offers */
@@ -157,7 +170,7 @@ export class ApiService {
     params: Record<string, string>,
   ): Observable<{ data: Offer[]; next_cursor: string | null; limit: number }> {
     return this.http.get<{ data: Offer[]; next_cursor: string | null; limit: number }>(
-      `${this.baseUrl}/credits`,
+      `${this.baseUrl}/marketplace/listings`,
       { params },
     );
   }
@@ -227,6 +240,15 @@ export class ApiService {
     return this.http.post<{ offerId: string }>(`${this.baseUrl}/marketplace/offer`, body, {
       headers: this.authHeaders(token).set('Idempotency-Key', crypto.randomUUID()),
     });
+  }
+
+  /** POST /marketplace/offer/:id/buy — fill an existing offer (buyer side) */
+  buyOffer(id: number | string, token: string): Observable<void> {
+    return this.http.post<void>(
+      `${this.baseUrl}/marketplace/offer/${id}/buy`,
+      {},
+      { headers: this.authHeaders(token) },
+    );
   }
 
   // ── Verifiers ─────────────────────────────────────────────────────────────

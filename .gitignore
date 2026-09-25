@@ -1,21 +1,18 @@
-# Dependencies
+# ── Node / JavaScript ─────────────────────────────────────────────────────────
 node_modules/
-target/
 dist/
 .angular/
 .nest/
 
-# Environment
-.env
-.env.*
-!.env.example
-frontend/src/environments/environment.ts
-frontend/src/environments/environment.prod.ts
+# Package managers
+.npm/
+.yarn/
+yarn.lock
+pnpm-lock.yaml
 
-# OS
-.DS_Store
-Thumbs.db
-*.DS_Store
+# ── Rust / Soroban ────────────────────────────────────────────────────────────
+target/
+Cargo.lock
 
 # Kiro CLI
 .kiro/
@@ -34,14 +31,13 @@ shared/index.d.ts
 *.njsproj
 *.sln
 
-# Soroban
+# Soroban CLI state and deployment artefacts
 .soroban/
 contract-ids.testnet.json
+scripts/contract-ids.testnet.json
 
-# Temporary
-tmp/
-logs/
-*.log
+# Soroban test snapshots (auto-generated, not source — never commit these)
+test_snapshots/
 
 # Test artifacts — auto-generated, must not be committed
 coverage/
@@ -75,7 +71,8 @@ cypress/screenshots/
 cypress/videos/
 cypress/downloads/
 
-# Build artifacts
+# ── Build Artifacts ───────────────────────────────────────────────────────────
+build/
 *.js.map
 *.d.ts.map
 build/

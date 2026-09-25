@@ -9,6 +9,7 @@ import { CreditsService } from '../credits/credits.service';
 import { VerifiersService } from '../verifiers/verifiers.service';
 import { StellarService } from '../stellar/stellar.service';
 import { StellarKeypairService } from '../stellar/stellar-keypair.service';
+import { RetirementService } from '../retirement/retirement.service';
 import { CreditStatus } from '../../../shared';
 import { Keypair } from '@stellar/stellar-sdk';
 
@@ -68,6 +69,7 @@ describe('AdminService', () => {
           provide: CreditsService,
           useValue: {
             getCredit: jest.fn().mockResolvedValue(mockCredit),
+            getCreditCount: jest.fn().mockResolvedValue(42),
           },
         },
         {
@@ -108,6 +110,11 @@ describe('AdminService', () => {
         {
           provide: getRepositoryToken(AdminAuditEntity),
           useValue: auditRepo,
+          provide: RetirementService,
+          useValue: {
+            getTotalRetired: jest.fn().mockResolvedValue(0),
+            listRetirements: jest.fn().mockResolvedValue({ total: 5 }),
+          },
         },
       ],
     }).compile();

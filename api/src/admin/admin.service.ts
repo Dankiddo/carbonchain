@@ -1,9 +1,10 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, NotImplementedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { CreditsService } from '../credits/credits.service';
 import { VerifiersService } from '../verifiers/verifiers.service';
+import { RetirementService } from '../retirement/retirement.service';
 import { StellarService } from '../stellar/stellar.service';
 import { StellarKeypairService } from '../stellar/stellar-keypair.service';
 import { CreditStatus } from '../../../shared';
@@ -54,6 +55,7 @@ export class AdminService {
     private readonly keypairService: StellarKeypairService,
     @InjectRepository(AdminAuditEntity)
     private readonly auditRepo: Repository<AdminAuditEntity>,
+    private readonly retirementService: RetirementService,
   ) {
     this.creditRegistryContractId =
       this.configService.get<string>('CREDIT_REGISTRY_CONTRACT_ID') || '';
@@ -102,9 +104,15 @@ export class AdminService {
     } catch {
       // Non-fatal — default to false if contract call fails.
     }
+    const [totalCredits, retirements] = await Promise.all([
+      this.creditsService.getCreditCount(),
+      this.retirementService.listRetirements(1, 1),
+    ]);
     return {
       totalCredits: 0,
       totalRetirements: 0,
+      totalCredits,
+      totalRetirements: retirements.total,
       activeVerifiers: verifiers.length,
       paused,
     };
@@ -190,6 +198,17 @@ export class AdminService {
       { verifier },
       { suspended: true },
     );
+    void address;
+    // No `register_verifier` contract/DB call exists yet — see verifiers.service.ts.
+    // Returning a fake success here would silently mislead admin tooling.
+    throw new NotImplementedException(
+      'registerVerifier is not implemented: no backing contract/DB call exists yet',
+    );
+  }
+
+  async suspendVerifier(id: string): Promise<{ suspended: boolean }> {
+    await this.verifiersService.getVerifier(id);
+    this.logger.log(`Verifier ${id} suspended by admin`);
     return { suspended: true };
   }
 
@@ -207,6 +226,12 @@ export class AdminService {
       { configured: true, verifierId: id, capabilities },
     );
     return { configured: true, verifierId: id };
+    void _capabilities;
+    await this.verifiersService.getVerifier(id);
+    // No `configure_verifier` contract/DB call exists yet.
+    throw new NotImplementedException(
+      'configureVerifier is not implemented: no backing contract/DB call exists yet',
+    );
   }
 
   async flagCredit(
@@ -221,6 +246,8 @@ export class AdminService {
       { status: (credit as { status?: unknown })?.status ?? null },
       { flagged: true, creditId: id, status: CreditStatus.Flagged },
     );
+    await this.creditsService.getCredit(id);
+    this.logger.log(`Credit ${id} flagged by admin`);
     return { flagged: true, creditId: id, status: CreditStatus.Flagged };
   }
 
@@ -306,6 +333,7 @@ export class AdminService {
       null,
       { registered: true, name, description },
     );
+    this.logger.log(`Registering methodology: ${name}`);
     return { registered: true, name, description };
   }
 

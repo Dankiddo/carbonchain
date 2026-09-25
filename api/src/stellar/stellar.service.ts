@@ -49,6 +49,7 @@ export class StellarService implements OnModuleInit {
   private horizonServer: Horizon.Server;
   private sorobanRpcServer: rpc.Server;
   private networkPassphrase: string;
+  private networkTimeoutMs = 10_000;
 
   /** Fee buffer multiplier (default 1.1). Configurable via FEE_BUFFER_MULTIPLIER. */
   private readonly feeBufferMultiplier: number;
@@ -81,6 +82,20 @@ export class StellarService implements OnModuleInit {
       : DEFAULT_FEE_BUFFER_MULTIPLIER;
   }
 
+  private withTimeout<T>(operation: Promise<T>, name: string): Promise<T> {
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout>;
+    const timeout = new Promise<T>((_, reject) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        reject(new Error(`${name} timed out`));
+      }, this.networkTimeoutMs);
+    });
+    return Promise.race([operation, timeout]).finally(() =>
+      clearTimeout(timer),
+    );
+  }
+
   onModuleInit() {
     const horizonUrl =
       this.configService.get<string>('HORIZON_URL') ||
@@ -91,6 +106,10 @@ export class StellarService implements OnModuleInit {
     const network = this.configService.get<string>(
       'STELLAR_NETWORK',
       'TESTNET',
+    );
+    this.networkTimeoutMs = this.configService.get<number>(
+      'STELLAR_RPC_TIMEOUT_MS',
+      10_000,
     );
 
     this.horizonServer = new Horizon.Server(horizonUrl);
@@ -400,6 +419,13 @@ export class StellarService implements OnModuleInit {
     }
   }
 
+  private isBadSequenceError(error: unknown): boolean {
+    if (typeof error === 'string') return error.includes('tx_bad_seq');
+    if (error instanceof Error) return error.message.includes('tx_bad_seq');
+    const serialized = JSON.stringify(error);
+    return typeof serialized === 'string' && serialized.includes('tx_bad_seq');
+  }
+
   async buildAndSubmit(
     operations: Operation[],
     signerKeypair: Keypair,
@@ -474,7 +500,10 @@ export class StellarService implements OnModuleInit {
       }),
     );
 
-    const response = await this.sorobanRpcServer.getLedgerEntries(ledgerKey);
+    const response = await this.withTimeout(
+      this.sorobanRpcServer.getLedgerEntries(ledgerKey),
+      'getLedgerEntries',
+    );
     if (response.entries && response.entries.length > 0) {
       const entry = response.entries[0];
       // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
@@ -491,7 +520,10 @@ export class StellarService implements OnModuleInit {
   async simulateTransaction(
     tx: Transaction,
   ): Promise<rpc.Api.SimulateTransactionResponse> {
-    return this.sorobanRpcServer.simulateTransaction(tx);
+    return this.withTimeout(
+      this.sorobanRpcServer.simulateTransaction(tx),
+      'simulateTransaction',
+    );
   }
 
   private async pollTransactionStatus(
@@ -500,7 +532,10 @@ export class StellarService implements OnModuleInit {
     delayMs = 2000,
   ): Promise<rpc.Api.GetTransactionResponse> {
     for (let i = 0; i < maxRetries; i++) {
-      const response = await this.sorobanRpcServer.getTransaction(hash);
+      const response = await this.withTimeout(
+        this.sorobanRpcServer.getTransaction(hash),
+        'getTransaction',
+      );
       if (
         response.status !== rpc.Api.GetTransactionStatus.NOT_FOUND &&
         (response.status as any) !== 'PENDING'
@@ -539,8 +574,16 @@ export class StellarService implements OnModuleInit {
           throw error;
         }
 
-        // Only retry on transient errors (429, 503)
-        if (statusCode !== 429 && statusCode !== 503) {
+        const message = lastError.message.toLowerCase();
+        const transient =
+          statusCode === 429 ||
+          statusCode === 500 ||
+          statusCode === 502 ||
+          statusCode === 503 ||
+          statusCode === 504 ||
+          message.includes('timed out') ||
+          message.includes('econnreset');
+        if (!transient) {
           throw error;
         }
 
@@ -616,7 +659,10 @@ export class StellarService implements OnModuleInit {
     if (cached && cached.expiresAt > now) {
       return cached.value;
     }
-    const account = await this.horizonServer.loadAccount(publicKey);
+    const account = await this.withTimeout(
+      this.horizonServer.loadAccount(publicKey),
+      'loadAccount',
+    );
     this.accountInfoCache.set(publicKey, {
       value: account as unknown as Horizon.ServerApi.AccountRecord,
       expiresAt: now + StellarService.ACCOUNT_INFO_TTL_MS,
@@ -646,22 +692,40 @@ export class StellarService implements OnModuleInit {
     startLedger = 0,
   ): Promise<rpc.Api.EventResponse[]> {
     try {
-      const response = await this.sorobanRpcServer.getEvents({
-        filters: [
-          {
-            type: 'contract',
-            contractIds: [contractId],
-          },
-        ],
-        startLedger,
-        limit: 100,
-      });
+      const response = await this.withTimeout(
+        this.sorobanRpcServer.getEvents({
+          filters: [
+            {
+              type: 'contract',
+              contractIds: [contractId],
+            },
+          ],
+          startLedger,
+          limit: 100,
+        }),
+        'getContractEvents',
+      );
       return response.events || [];
     } catch (error) {
       this.logger.error(
         `[requestId=${RequestContextStore.getRequestId() ?? 'unknown'}] Failed to fetch events for contract ${contractId}: ${(error as Error).message}`,
       );
       return [];
+    }
+  }
+
+  async getLatestLedger(): Promise<number> {
+    try {
+      const response = await this.withTimeout(
+        this.sorobanRpcServer.getLatestLedger(),
+        'getLatestLedger',
+      );
+      return response.sequence;
+    } catch (error) {
+      this.logger.error(
+        `[requestId=${RequestContextStore.getRequestId() ?? 'unknown'}] Failed to get latest ledger: ${(error as Error).message}`,
+      );
+      return 0;
     }
   }
 }

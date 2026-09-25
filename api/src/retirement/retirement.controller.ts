@@ -6,6 +6,7 @@ import {
   Body,
   UseGuards,
   Query,
+  Request,
   ParseIntPipe,
   DefaultValuePipe,
   NotFoundException,
@@ -20,13 +21,15 @@ import {
   BatchRetireResult,
   CertificateVerification,
 } from './retirement.service';
-import { FullRetireDto } from './dto/retire.dto';
+import { RetirementRequestDto } from './dto/retire.dto';
 import { BatchRetireDto } from './dto/batch-retire.dto';
 import { RetirementRecord } from '../../../shared';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { ThrottlerGuard, Throttle } from '../common/throttler.guard';
 import { PageResult } from '../credits/credit.repository';
 import { CertificateService } from './certificate.service';
+import { StellarAddressPipe } from '../common/pipes/stellar-address.pipe';
+import { Idempotent } from '../common/idempotency.interceptor';
 
 @ApiTags('retirement')
 @Controller('retirement')
@@ -40,11 +43,20 @@ export class RetirementController {
   @ApiResponse({ status: 201, description: 'Credit retired successfully' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @UseGuards(JwtAuthGuard)
+  @Idempotent()
   @Post()
   retire(
-    @Body() dto: FullRetireDto,
+    @Body() dto: RetirementRequestDto,
+    @Request() req: { user: { account: string } },
   ): Promise<{ retirementId: string; certificateIpfsHash: string }> {
-    return this.retirementService.retire(dto);
+    // Buyer is bound to the authenticated principal, never taken from the body.
+    // Delegates to retireCredit so this path runs the same off-chain status
+    // checks as POST /credits/:id/retire.
+    return this.retirementService.retireCredit(
+      dto.creditId,
+      { reason: dto.reason, nonce: dto.nonce },
+      req.user.account,
+    );
   }
 
   @ApiOperation({ summary: 'Batch retire multiple credits at once' })
@@ -53,6 +65,7 @@ export class RetirementController {
   @ApiResponse({ status: 429, description: 'Too Many Requests' })
   @Throttle({ limit: 5, ttl: 60000 })
   @UseGuards(JwtAuthGuard, ThrottlerGuard)
+  @Idempotent()
   @Post('batch')
   batchRetire(@Body() dto: BatchRetireDto): Promise<BatchRetireResult> {
     return this.retirementService.batchRetire(dto);
@@ -68,7 +81,8 @@ export class RetirementController {
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
   ): Promise<PageResult<RetirementRecord>> {
-    return this.retirementService.listRetirements(page, limit);
+    const clampedLimit = Math.min(Math.max(limit, 1), 100);
+    return this.retirementService.listRetirements(page, clampedLimit);
   }
 
   @ApiOperation({ summary: 'Get retirement record by ID' })
@@ -86,11 +100,16 @@ export class RetirementController {
   })
   @Get('account/:address')
   getByAccount(
-    @Param('address') address: string,
+    @Param('address', StellarAddressPipe) address: string,
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
   ): Promise<PageResult<RetirementRecord>> {
-    return this.retirementService.getRetirementsByAccount(address, page, limit);
+    const clampedLimit = Math.min(Math.max(limit, 1), 100);
+    return this.retirementService.getRetirementsByAccount(
+      address,
+      page,
+      clampedLimit,
+    );
   }
 
   @ApiOperation({ summary: 'Download retirement certificate as PDF' })
