@@ -37,6 +37,7 @@ export class RetirementController {
   constructor(
     private readonly retirementService: RetirementService,
     private readonly certificateService: CertificateService,
+    private readonly certHashReconciler: CertHashReconciler,
   ) {}
 
   @ApiOperation({ summary: 'Retire a carbon credit' })
@@ -155,13 +156,48 @@ export class RetirementController {
     });
   }
 
+  /**
+   * GET /retirement/certificates/:id/verify
+   *
+   * Returns the retirement certificate verification result, including:
+   *   - #918: txStatus — on-chain finality state (pending/success/failed/timeout)
+   *   - #921: certHashStatus — whether the IPFS hash is written on-chain
+   *             (none/pending/onchain/failure)
+   */
   @ApiOperation({ summary: 'Verify retirement certificate authenticity' })
-  @ApiResponse({ status: 200, description: 'Certificate verification result' })
+  @ApiResponse({
+    status: 200,
+    description: 'Certificate verification result with on-chain status fields',
+    type: CertificateResponse,
+  })
   @ApiResponse({ status: 404, description: 'Certificate not found' })
   @Get('certificates/:id/verify')
   verifyCertificate(
     @Param('id') certificateId: string,
   ): Promise<CertificateVerification> {
     return this.retirementService.verifyCertificate(certificateId);
+  }
+
+  /**
+   * POST /retirement/certificates/:id/reconcile
+   *
+   * Manually trigger a cert hash reconciliation for a single retirement.
+   * Useful for support workflows when the daily reconciler hasn't run yet.
+   * #921
+   */
+  @ApiOperation({
+    summary:
+      'Trigger cert hash reconciliation for a specific retirement (#921)',
+  })
+  @ApiResponse({ status: 200, description: 'Reconciliation result' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @UseGuards(JwtAuthGuard)
+  @Post('certificates/:id/reconcile')
+  async reconcileCertHash(
+    @Param('id') retirementId: string,
+  ): Promise<{ triggered: boolean; retirementId: string }> {
+    // Run the full reconciler scan — it will pick up this record if pending
+    await this.certHashReconciler.reconcile(1);
+    return { triggered: true, retirementId };
   }
 }

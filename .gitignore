@@ -42,7 +42,9 @@ test_snapshots/
 # Test artifacts — auto-generated, must not be committed
 coverage/
 __snapshots__/
+**/__snapshots__/
 *.snap
+*.test-snapshot
 junit.xml
 test-results/
 .nyc_output/
