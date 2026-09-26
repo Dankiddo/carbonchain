@@ -72,6 +72,10 @@ export class RetirementController {
   }
 
   @ApiOperation({ summary: 'List retirements (paginated)' })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'pageSize', required: false, type: Number })
+  @ApiQuery({ name: 'buyer', required: false, type: String })
+  @ApiQuery({ name: 'status', required: false, type: String })
   @ApiResponse({
     status: 200,
     description: 'Paginated list of retirement records',
@@ -94,6 +98,8 @@ export class RetirementController {
   }
 
   @ApiOperation({ summary: 'Get retirements by account address' })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'pageSize', required: false, type: Number })
   @ApiResponse({
     status: 200,
     description: 'Paginated retirements for account',
