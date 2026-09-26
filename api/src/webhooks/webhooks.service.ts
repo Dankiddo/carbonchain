@@ -62,6 +62,8 @@ export interface WebhookDelivery {
   eventType: string;
   status: 'pending' | 'success' | 'failed';
   attempts: number;
+  /** #935 — timestamp when the delivery record was first created (for GC janitor). */
+  createdAt: Date;
   lastAttemptAt?: Date;
   nextRetryAt?: Date;
 }

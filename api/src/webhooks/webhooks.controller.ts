@@ -16,6 +16,10 @@ import type {
 } from './webhooks.service';
 import { WebhooksService } from './webhooks.service';
 import { WebhookIpAllowlistGuard } from './webhook-ip-allowlist.guard';
+import {
+  WebhookJanitorService,
+  JanitorStats,
+} from '../common/webhook-janitor.service';
 
 @ApiTags('webhooks')
 @Controller('webhooks')

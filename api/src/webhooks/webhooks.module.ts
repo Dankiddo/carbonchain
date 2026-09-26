@@ -22,6 +22,6 @@ import { WebhookIpAllowlistGuard } from './webhook-ip-allowlist.guard';
   ],
   providers: [WebhooksService, WebhookIpGuard, WebhookIpAllowlistGuard],
   controllers: [WebhooksController],
-  exports: [WebhooksService],
+  exports: [WebhooksService, WebhookJanitorService],
 })
 export class WebhooksModule {}
