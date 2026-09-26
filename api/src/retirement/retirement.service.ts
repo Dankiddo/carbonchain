@@ -493,7 +493,15 @@ export class RetirementService {
       count: 1,
     } satisfies RetirementCompletedEvent);
 
-    return { retirementId, certificateIpfsHash: certificateIpfsHash ?? '' };
+    // Issue #917 — surface the simulated fee so the caller and DTOs can show
+    // an accurate, non-constant fee estimate driven by minResourceFee × multiplier.
+    const estimatedFeeStroops = (response as unknown as { estimatedFeeStroops?: number }).estimatedFeeStroops;
+
+    return {
+      retirementId,
+      certificateIpfsHash: certificateIpfsHash ?? '',
+      ...(estimatedFeeStroops !== undefined ? { estimatedFeeStroops } : {}),
+    };
   }
 
   /**

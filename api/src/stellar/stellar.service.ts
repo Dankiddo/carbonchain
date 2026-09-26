@@ -20,12 +20,17 @@ import {
   rpc,
 } from '@stellar/stellar-sdk';
 import { SequenceNumberManager } from './sequence-number-manager.service';
+import { RedisSequenceNumberManager } from './redis-sequence-number-manager.service';
 import { RequestContextStore } from '../common/request-context';
 import {
   METRICS_EVENT_EMITTER,
   CONTRACT_INVOCATION_COMPLETED,
+  TX_BAD_SEQ,
 } from '../metrics/metrics-events';
-import type { ContractInvocationCompletedEvent } from '../metrics/metrics-events';
+import type {
+  ContractInvocationCompletedEvent,
+  TxBadSeqEvent,
+} from '../metrics/metrics-events';
 import type { EventEmitter } from 'events';
 
 /**
@@ -41,8 +46,14 @@ const FALLBACK_BASE_FEE = 100; // stroops
 /** TTL for the Horizon base fee cache (ms). */
 const BASE_FEE_CACHE_TTL_MS = 60_000;
 
-/** Mandatory delay before re-fetching sequence number after tx_bad_seq (ms). */
-const BAD_SEQ_RETRY_DELAY_MS = 200;
+/**
+ * Issue #916 — Initial delay (ms) before the first tx_bad_seq retry.
+ * Subsequent retries use exponential backoff: delay * 2^attempt.
+ */
+const BAD_SEQ_INITIAL_RETRY_DELAY_MS = 200;
+
+/** Maximum number of tx_bad_seq retries per submission. */
+const BAD_SEQ_MAX_RETRIES = 3;
 
 /**
  * Result returned by confirmTransaction (#918).
@@ -85,7 +96,16 @@ export class StellarService implements OnModuleInit {
 
   constructor(
     private configService: ConfigService,
-    private seqNoManager: SequenceNumberManager,
+    /**
+     * Issue #914 — Primary sequence manager: Redis-backed for multi-replica
+     * coordination. Falls back to in-memory when Redis is unavailable.
+     */
+    private seqNoManager: RedisSequenceNumberManager,
+    /**
+     * Issue #914 — In-memory fallback, kept as a named dependency so it can
+     * be used directly in unit tests that do not wire Redis.
+     */
+    @Optional() private inMemorySeqManager?: SequenceNumberManager,
     @Optional()
     @Inject(METRICS_EVENT_EMITTER)
     private readonly metricsEmitter?: EventEmitter,
@@ -148,8 +168,8 @@ export class StellarService implements OnModuleInit {
   }
 
   private async getNextSequenceNumber(publicKey: string): Promise<number> {
-    // Issue #510: use the per-account promise queue so concurrent callers for
-    // the same account never receive the same sequence number.
+    // Issue #914: use the Redis-backed manager for distributed sequence coordination
+    // across replicas. Falls back to in-memory automatically when Redis is down.
     return this.seqNoManager.getNextSequenceNumberAtomic(
       publicKey,
       async () => {
@@ -225,8 +245,8 @@ export class StellarService implements OnModuleInit {
     method: string,
     args: xdr.ScVal[] = [],
     signerKeypair: Keypair,
-    retries = 1,
-  ): Promise<rpc.Api.GetTransactionResponse> {
+    retries = BAD_SEQ_MAX_RETRIES,
+  ): Promise<rpc.Api.GetTransactionResponse & { estimatedFeeStroops?: number }> {
     const startTime = Date.now();
 
     try {
@@ -255,15 +275,19 @@ export class StellarService implements OnModuleInit {
    * Core implementation of invokeContract, extracted so the public method
    * can wrap it with timing and failure-event emission without interfering
    * with the recursive bad-seq retry path.
+   *
+   * Issue #917 — returns the response enriched with `estimatedFeeStroops` so
+   * callers (and DTOs) can surface the actual fee derived from simulation.
    */
   private async invokeContractImpl(
     contractId: string,
     method: string,
     args: xdr.ScVal[] = [],
     signerKeypair: Keypair,
-    retries = 1,
+    retries = BAD_SEQ_MAX_RETRIES,
     startTime: number,
-  ): Promise<rpc.Api.GetTransactionResponse> {
+    badSeqAttempt = 0,
+  ): Promise<rpc.Api.GetTransactionResponse & { estimatedFeeStroops?: number }> {
     const pk = signerKeypair.publicKey();
     const seq = await this.getNextSequenceNumber(pk);
     const account = new Account(pk, seq.toString());
@@ -353,7 +377,9 @@ export class StellarService implements OnModuleInit {
               `[issue#546] Contract call fee paid: method=${method} fee_stroops=${currentFee}`,
             );
 
-            return result;
+            // Issue #917 — attach the actual simulated fee so callers and
+            // DTOs can surface a non-constant estimatedFeeStroops value.
+            return Object.assign(result, { estimatedFeeStroops: currentFee });
           }
           throw new Error(`Transaction failed with status: ${response.status}`);
         } catch (error: unknown) {
@@ -406,13 +432,28 @@ export class StellarService implements OnModuleInit {
               'tx_bad_seq';
 
           if (isBadSeq && retries > 0) {
+            // Issue #916 — exponential backoff on tx_bad_seq retries.
+            // delay = BAD_SEQ_INITIAL_RETRY_DELAY_MS * 2^badSeqAttempt
+            const delay =
+              BAD_SEQ_INITIAL_RETRY_DELAY_MS * Math.pow(2, badSeqAttempt);
+
             this.logger.warn(
-              `tx_bad_seq for ${pk} (sig:${method}), waiting ${BAD_SEQ_RETRY_DELAY_MS}ms then resetting cache and retrying`,
+              `[#916] tx_bad_seq for ${pk} (method=${method}), attempt ${badSeqAttempt + 1}/${BAD_SEQ_MAX_RETRIES}, ` +
+                `invalidating cache and retrying in ${delay}ms`,
             );
-            this.seqNoManager.reset(pk);
-            await new Promise((resolve) =>
-              setTimeout(resolve, BAD_SEQ_RETRY_DELAY_MS),
-            );
+
+            // Issue #916 — emit tx_bad_seq metric so operators can track frequency.
+            this.metricsEmitter?.emit(TX_BAD_SEQ, {
+              publicKey: pk,
+              method,
+              attempt: badSeqAttempt + 1,
+            } satisfies TxBadSeqEvent);
+
+            // Invalidate both Redis and in-memory caches so the next attempt
+            // re-fetches the current sequence from Horizon.
+            await this.seqNoManager.reset(pk);
+            await new Promise<void>((resolve) => setTimeout(resolve, delay));
+
             return this.invokeContractImpl(
               contractId,
               method,
@@ -420,6 +461,7 @@ export class StellarService implements OnModuleInit {
               signerKeypair,
               retries - 1,
               startTime,
+              badSeqAttempt + 1,
             );
           }
           throw error;
@@ -445,7 +487,8 @@ export class StellarService implements OnModuleInit {
   async buildAndSubmit(
     operations: Operation[],
     signerKeypair: Keypair,
-    retries = 1,
+    retries = BAD_SEQ_MAX_RETRIES,
+    badSeqAttempt = 0,
   ): Promise<Horizon.HorizonApi.SubmitTransactionResponse> {
     const pk = signerKeypair.publicKey();
     const seq = await this.getNextSequenceNumber(pk);
@@ -489,15 +532,31 @@ export class StellarService implements OnModuleInit {
         )?.response?.data?.extras?.result_codes?.transaction === 'tx_bad_seq';
 
       if (isBadSeq && retries > 0) {
+        // Issue #916 — exponential backoff on tx_bad_seq retries.
+        const delay =
+          BAD_SEQ_INITIAL_RETRY_DELAY_MS * Math.pow(2, badSeqAttempt);
+
         this.logger.warn(
-          `tx_bad_seq for ${pk}, waiting ${BAD_SEQ_RETRY_DELAY_MS}ms then resetting cache and retrying`,
+          `[#916] tx_bad_seq for ${pk} (Horizon), attempt ${badSeqAttempt + 1}/${BAD_SEQ_MAX_RETRIES}, ` +
+            `invalidating cache and retrying in ${delay}ms`,
         );
-        this.seqNoManager.reset(pk);
-        // Issue #473: mandatory delay before re-fetching to allow Horizon to catch up.
-        await new Promise((resolve) =>
-          setTimeout(resolve, BAD_SEQ_RETRY_DELAY_MS),
+
+        // Issue #916 — emit tx_bad_seq metric counter.
+        this.metricsEmitter?.emit(TX_BAD_SEQ, {
+          publicKey: pk,
+          method: 'buildAndSubmit',
+          attempt: badSeqAttempt + 1,
+        } satisfies TxBadSeqEvent);
+
+        // Invalidate both Redis and in-memory caches.
+        await this.seqNoManager.reset(pk);
+        await new Promise<void>((resolve) => setTimeout(resolve, delay));
+        return this.buildAndSubmit(
+          operations,
+          signerKeypair,
+          retries - 1,
+          badSeqAttempt + 1,
         );
-        return this.buildAndSubmit(operations, signerKeypair, retries - 1);
       }
       throw error;
     }
